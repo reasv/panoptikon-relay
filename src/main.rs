@@ -1,7 +1,7 @@
 use axum::{
     Router,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -273,13 +273,23 @@ fn load_or_generate_token(config_path: &Path) -> anyhow::Result<(String, bool)> 
 struct OpenQuery {
     path: String,
     verb: Option<String>, // open | folder
-    token: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ConfigQuery {
     verb: Option<String>, // open | folder
-    token: Option<String>,
+}
+
+// Helper function to extract and validate Bearer token from Authorization header
+fn validate_bearer_token(headers: &HeaderMap, expected_token: &str) -> bool {
+    if let Some(auth_header) = headers.get("authorization") {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                return token == expected_token;
+            }
+        }
+    }
+    false
 }
 
 async fn healthy() -> &'static str {
@@ -288,11 +298,12 @@ async fn healthy() -> &'static str {
 
 async fn open(
     State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
     axum::extract::Query(q): axum::extract::Query<OpenQuery>,
 ) -> impl IntoResponse {
     // Token enforcement
     if st.require_token {
-        if q.token.as_deref() != Some(&st.token) {
+        if !validate_bearer_token(&headers, &st.token) {
             return StatusCode::UNAUTHORIZED;
         }
     }
@@ -320,11 +331,12 @@ async fn open(
 
 async fn config_endpoint(
     State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
     axum::extract::Query(q): axum::extract::Query<ConfigQuery>,
 ) -> impl IntoResponse {
     // Token enforcement
     if st.require_token {
-        if q.token.as_deref() != Some(&st.token) {
+        if !validate_bearer_token(&headers, &st.token) {
             return StatusCode::UNAUTHORIZED;
         }
     }
@@ -362,7 +374,7 @@ async fn main() -> anyhow::Result<()> {
     {
         eprintln!("Error: Failed to initialize the tracing subscriber. Logs may not be available.");
     }
-    info!("Starting panoptikon-relay..."); // Moved after logger initialization
+    info!("Starting panoptikon-relay...");
 
     let cli = Cli::parse();
     let (cfg, config_path) = Config::load()?;
