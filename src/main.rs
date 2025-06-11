@@ -98,9 +98,9 @@ struct AppState {
 // Constants for platform‑default commands
 // ─────────────────────────────────────────────────────────────
 #[cfg(target_os = "windows")]
-const OPEN_DEFAULT: &str = r#"cmd /C start "" "{path}""#;
+const OPEN_DEFAULT: &str = r#"start "" "{path}""#;
 #[cfg(target_os = "windows")]
-const REVEAL_DEFAULT: &str = r#"explorer /select,"{path}""#;
+const REVEAL_DEFAULT: &str = r#"explorer /select,{path}"#;
 
 #[cfg(target_os = "macos")]
 const OPEN_DEFAULT: &str = r#"open "{path}""#;
@@ -135,7 +135,33 @@ fn substitute(cmd_tpl: &str, path: &Path) -> String {
 async fn run_command(cmd: &str) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd").args(["/C", cmd]).spawn()?;
+        // On Windows, parsing command strings is tricky. It's more robust
+        // to pass arguments separately instead of a single string to `cmd /C`.
+
+        // Special, robust handling for the `start` command.
+        // `start ""` requires the empty title `""` as its own argument.
+        if let Some(path_part) = cmd.strip_prefix(r#"start "" "#) {
+            // The path_part is the quoted path, e.g., `"C:\path\to\file.toml"`.
+            // We must un-quote it here, because the Command builder will add
+            // its own quotes correctly when spawning the process.
+            let unquoted_path = path_part.trim_matches('"');
+            Command::new("cmd")
+                .arg("/C")
+                .arg("start")
+                .arg("") // This is the empty title argument
+                .arg(unquoted_path) // This is the file/URL to open
+                .spawn()?;
+
+        // Special, robust handling for the `explorer` command.
+        // It's an executable, so we can call it directly without `cmd /C`.
+        } else if let Some(path_part) = cmd.strip_prefix("explorer ") {
+            Command::new("explorer")
+                .arg(path_part) // e.g., /select,"C:\path\to\file.toml"
+                .spawn()?;
+        } else {
+            // Fallback for other custom commands, retaining the original behavior.
+            Command::new("cmd").args(["/C", cmd]).spawn()?;
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
