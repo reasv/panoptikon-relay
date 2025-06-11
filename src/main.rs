@@ -43,8 +43,6 @@ struct Config {
     commands: Commands,
     #[serde(default, with = "map_to_vec")]
     mappings: Vec<Mapping>,
-    #[serde(default)]
-    token: Option<String>, // capability token – can be stored here too
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -89,6 +87,7 @@ mod map_to_vec {
 // ─────────────────────────────────────────────────────────────
 struct AppState {
     cfg: Config,
+    config_path: PathBuf,
     open_cmd: String,
     show_cmd: String,
     token: String,
@@ -156,19 +155,20 @@ async fn run_command(cmd: &str) -> std::io::Result<()> {
 // Config loader + helpers
 // ─────────────────────────────────────────────────────────────
 impl Config {
-    fn load() -> anyhow::Result<Self> {
-        let path = dirs::config_dir()
+    fn load() -> anyhow::Result<(Self, PathBuf)> {
+        let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("No config dir"))?
-            .join("openfile-helper")
-            .join("config.toml");
+            .join("openfile-helper");
+
+        let path = config_dir.join("config.toml");
 
         if !path.exists() {
-            std::fs::create_dir_all(path.parent().unwrap())?;
+            std::fs::create_dir_all(&config_dir)?;
             std::fs::write(&path, DEFAULT_CONFIG.trim_start())?;
             println!("Created default config at {}", path.display());
         }
         let txt = std::fs::read_to_string(&path)?;
-        Ok(toml::from_str(&txt)?)
+        Ok((toml::from_str(&txt)?, path))
     }
 
     /// Translate by longest prefix (already sorted).
@@ -189,16 +189,55 @@ impl Config {
     fn commands(&self) -> (String, String) {
         let open = std::env::var("OPEN_FILE_COMMAND")
             .ok()
-            .or_else(|| self.commands.open_file.clone())
+            .or_else(|| self.commands.open_file.clone().filter(|s| !s.is_empty()))
             .unwrap_or_else(|| OPEN_DEFAULT.to_string());
 
         let show = std::env::var("SHOW_IN_FM_COMMAND")
             .ok()
-            .or_else(|| self.commands.show_in_fm.clone())
+            .or_else(|| self.commands.show_in_fm.clone().filter(|s| !s.is_empty()))
             .unwrap_or_else(|| REVEAL_DEFAULT.to_string());
 
         (open, show)
     }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Token management functions
+// ─────────────────────────────────────────────────────────────
+fn get_token_file_path(config_path: &Path) -> PathBuf {
+    config_path.parent().unwrap().join("token.txt")
+}
+
+fn load_or_generate_token(config_path: &Path) -> anyhow::Result<(String, bool)> {
+    // Check environment variable first
+    if let Ok(env_token) = std::env::var("API_KEY_SECRET") {
+        info!("Using token from environment variable API_KEY_SECRET");
+        return Ok((env_token, true)); // true means from env (don't print/store)
+    }
+
+    let token_path = get_token_file_path(config_path);
+
+    // Try to load existing token file
+    if token_path.exists() {
+        match std::fs::read_to_string(&token_path) {
+            Ok(token) => {
+                let token = token.trim().to_string();
+                if !token.is_empty() {
+                    info!("Loaded existing token from file");
+                    return Ok((token, false)); // false means from file (can print)
+                }
+            }
+            Err(e) => {
+                error!("Failed to read token file: {}", e);
+            }
+        }
+    }
+
+    // Generate new token and save it
+    let token = uuid::Uuid::new_v4().to_string();
+    std::fs::write(&token_path, &token)?;
+    info!("Generated new token and saved to file");
+    Ok((token, false)) // false means from file (can print)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -207,6 +246,12 @@ impl Config {
 #[derive(Deserialize)]
 struct OpenQuery {
     path: String,
+    verb: Option<String>, // open | folder
+    token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ConfigQuery {
     verb: Option<String>, // open | folder
     token: Option<String>,
 }
@@ -247,6 +292,36 @@ async fn open(
     StatusCode::NO_CONTENT
 }
 
+async fn config_endpoint(
+    State(st): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<ConfigQuery>,
+) -> impl IntoResponse {
+    // Token enforcement
+    if st.require_token {
+        if q.token.as_deref() != Some(&st.token) {
+            return StatusCode::UNAUTHORIZED;
+        }
+    }
+
+    // Resolve template
+    let cmd_tpl = match q.verb.as_deref() {
+        Some("folder") => &st.show_cmd,
+        _ => &st.open_cmd,
+    };
+    let cmd = substitute(cmd_tpl, &st.config_path);
+    info!(
+        "Running command: {cmd} for config path: {:?}",
+        st.config_path
+    );
+
+    // Spawn command
+    if let Err(e) = run_command(&cmd).await {
+        error!(?e, "Command failed");
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    StatusCode::NO_CONTENT
+}
+
 // ─────────────────────────────────────────────────────────────
 //  main
 // ─────────────────────────────────────────────────────────────
@@ -264,24 +339,17 @@ async fn main() -> anyhow::Result<()> {
     info!("Starting openfile-helper..."); // Moved after logger initialization
 
     let cli = Cli::parse();
-    let cfg = Config::load()?;
+    let (cfg, config_path) = Config::load()?;
     info!("Loaded config");
     let (open_cmd, show_cmd) = cfg.commands();
     info!("Commands processed");
 
-    let token: String;
-    if let Some(config_token) = cfg.token.clone() {
-        info!("Using token from config.");
-        token = config_token;
-    } else {
-        info!("No token in config. Attempting to generate a new UUID...");
-        token = uuid::Uuid::new_v4().to_string();
-        info!("New UUID generated for token.");
-    }
+    let (token, from_env) = load_or_generate_token(&config_path)?;
     info!("Token processing complete.");
 
     let state = Arc::new(AppState {
         cfg,
+        config_path,
         open_cmd,
         show_cmd,
         token: token.clone(),
@@ -292,6 +360,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/healthy", get(healthy))
         .route("/open", post(open))
+        .route("/config", post(config_endpoint))
         .with_state(state);
     info!("Router created");
 
@@ -299,7 +368,11 @@ async fn main() -> anyhow::Result<()> {
     info!("Socket address created");
 
     info!("Listening on http://{addr}");
-    info!("The API key is: {token}");
+    if !from_env {
+        info!("The API key is: {token}");
+    } else {
+        info!("Using API key from environment variable (not shown for security)");
+    }
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
