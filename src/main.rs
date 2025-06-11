@@ -159,7 +159,7 @@ async fn run_command(cmd: &str) -> std::io::Result<()> {
                 .arg(path_part) // e.g., /select,"C:\path\to\file.toml"
                 .spawn()?;
         } else {
-            // Fallback for other custom commands, retaining the original behavior.
+            // Fallback for other custom commands
             Command::new("cmd").args(["/C", cmd]).spawn()?;
         }
     }
