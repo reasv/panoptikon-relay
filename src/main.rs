@@ -158,7 +158,7 @@ impl Config {
     fn load() -> anyhow::Result<(Self, PathBuf)> {
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("No config dir"))?
-            .join("openfile-helper");
+            .join("panoptikon-relay");
 
         let path = config_dir.join("config.toml");
 
@@ -336,17 +336,13 @@ async fn main() -> anyhow::Result<()> {
     {
         eprintln!("Error: Failed to initialize the tracing subscriber. Logs may not be available.");
     }
-    info!("Starting openfile-helper..."); // Moved after logger initialization
+    info!("Starting panoptikon-relay..."); // Moved after logger initialization
 
     let cli = Cli::parse();
     let (cfg, config_path) = Config::load()?;
     info!("Loaded config");
     let (open_cmd, show_cmd) = cfg.commands();
-    info!("Commands processed");
-
     let (token, from_env) = load_or_generate_token(&config_path)?;
-    info!("Token processing complete.");
-
     let state = Arc::new(AppState {
         cfg,
         config_path,
@@ -355,17 +351,14 @@ async fn main() -> anyhow::Result<()> {
         token: token.clone(),
         require_token: !cli.no_token,
     });
-    info!("App state created");
 
     let app = Router::new()
         .route("/healthy", get(healthy))
         .route("/open", post(open))
         .route("/config", post(config_endpoint))
         .with_state(state);
-    info!("Router created");
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], cli.port));
-    info!("Socket address created");
 
     info!("Listening on http://{addr}");
     if !from_env {
