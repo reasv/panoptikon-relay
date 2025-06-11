@@ -13,7 +13,8 @@ use std::{
 };
 use tokio::process::Command;
 use tracing::{error, info};
-use tracing_subscriber::EnvFilter; // Added for robust logger initialization
+use tracing_subscriber::EnvFilter;
+use tray_icon::{TrayIconBuilder, menu::Menu}; // Added for robust logger initialization
 
 // ─────────────────────────────────────────────────────────────
 // CLI / daemon flags
@@ -483,6 +484,32 @@ async fn main() -> anyhow::Result<()> {
     } else {
         info!("Using API key from environment variable (not shown for security)");
     }
+    let tray_menu = Menu::new();
+
+    // Embed the icon at compile time and convert it to the proper format
+    let icon_data = include_bytes!("../icon.ico");
+    let icon = match image::load_from_memory(icon_data) {
+        Ok(img) => {
+            let rgba_img = img.to_rgba8();
+            let (width, height) = rgba_img.dimensions();
+            tray_icon::Icon::from_rgba(rgba_img.into_raw(), width, height).unwrap()
+        }
+        Err(_) => {
+            // Fallback to a simple blue icon if the ICO file can't be loaded
+            let mut fallback_data = Vec::new();
+            for _ in 0..(16 * 16) {
+                fallback_data.extend_from_slice(&[0, 100, 200, 255]); // Blue RGBA pixels
+            }
+            tray_icon::Icon::from_rgba(fallback_data, 16, 16).unwrap()
+        }
+    };
+
+    let _tray_icon = TrayIconBuilder::new()
+        .with_menu(Box::new(tray_menu))
+        .with_tooltip("Panoptikon Relay")
+        .with_icon(icon)
+        .build()
+        .unwrap();
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
