@@ -20,6 +20,10 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tray-icon = "0.20.1"
 arboard = "3.4.1"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser"] }
+
 [dependencies.uuid]
 version = "1.17.0"
 # Lets you generate random UUIDs

@@ -499,6 +499,8 @@ async fn main() -> anyhow::Result<()> {
     let separator = PredefinedMenuItem::separator();
     let quit_item = MenuItem::new("Exit", true, None);
 
+    info!("Created menu items");
+
     // Create the tray menu with items
     let tray_menu = Menu::with_items(&[
         &copy_token_item,
@@ -510,11 +512,18 @@ async fn main() -> anyhow::Result<()> {
     ])
     .unwrap();
 
+    info!("Created tray menu");
+
     // Store menu item IDs for event handling
     let copy_token_id = copy_token_item.id().clone();
     let open_config_id = open_config_item.id().clone();
     let show_config_folder_id = show_config_folder_item.id().clone();
     let quit_id = quit_item.id().clone();
+
+    info!(
+        "Menu item IDs - Copy: {:?}, Open: {:?}, Show: {:?}, Quit: {:?}",
+        copy_token_id, open_config_id, show_config_folder_id, quit_id
+    );
 
     // Embed the icon at compile time and convert it to the proper format
     let icon_data = include_bytes!("../icon.ico");
@@ -541,72 +550,132 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .unwrap();
 
-    // Start the menu event handler in a separate task
-    tokio::spawn(async move {
+    info!("Tray icon created successfully");
+
+    // Start the menu event handler in a blocking task
+    let token_for_events = token_for_events.clone();
+    let config_path_for_events = config_path_for_events.clone();
+
+    std::thread::spawn(move || {
         let menu_event_receiver = MenuEvent::receiver();
+        info!("Menu event handler started, waiting for events...");
 
         loop {
-            if let Ok(event) = menu_event_receiver.try_recv() {
-                let event_id = event.id();
+            match menu_event_receiver.recv() {
+                Ok(event) => {
+                    info!("Received menu event: {:?}", event.id());
+                    let event_id = event.id();
 
-                if *event_id == copy_token_id {
-                    // Copy API key to clipboard
-                    match arboard::Clipboard::new() {
-                        Ok(mut clipboard) => {
-                            if let Err(e) = clipboard.set_text(&token_for_events) {
-                                error!("Failed to copy token to clipboard: {}", e);
-                            } else {
-                                info!("API key copied to clipboard");
+                    if *event_id == copy_token_id {
+                        // Copy API key to clipboard
+                        info!("Copy token menu item clicked");
+                        match arboard::Clipboard::new() {
+                            Ok(mut clipboard) => {
+                                if let Err(e) = clipboard.set_text(&token_for_events) {
+                                    error!("Failed to copy token to clipboard: {}", e);
+                                } else {
+                                    info!("API key copied to clipboard");
+                                }
                             }
+                            Err(e) => error!("Failed to access clipboard: {}", e),
                         }
-                        Err(e) => error!("Failed to access clipboard: {}", e),
-                    }
-                } else if *event_id == open_config_id {
-                    // Open config file
-                    let cfg = match Config::load_from_path(&config_path_for_events) {
-                        Ok(cfg) => cfg,
-                        Err(e) => {
-                            error!("Failed to load config: {}", e);
-                            continue;
+                    } else if *event_id == open_config_id {
+                        // Open config file
+                        info!("Open config menu item clicked");
+                        let cfg = match Config::load_from_path(&config_path_for_events) {
+                            Ok(cfg) => cfg,
+                            Err(e) => {
+                                error!("Failed to load config: {}", e);
+                                continue;
+                            }
+                        };
+                        let (open_cmd, _) = cfg.commands();
+                        let cmd = substitute(&open_cmd, &config_path_for_events);
+
+                        // Run command synchronously in thread
+                        let result = std::process::Command::new("cmd").args(["/C", &cmd]).spawn();
+
+                        if let Err(e) = result {
+                            error!("Failed to open config file: {}", e);
+                        } else {
+                            info!("Opened config file");
                         }
-                    };
-                    let (open_cmd, _) = cfg.commands();
-                    let cmd = substitute(&open_cmd, &config_path_for_events);
-                    if let Err(e) = run_command(&cmd).await {
-                        error!("Failed to open config file: {}", e);
+                    } else if *event_id == show_config_folder_id {
+                        // Show config folder
+                        info!("Show config folder menu item clicked");
+                        let cfg = match Config::load_from_path(&config_path_for_events) {
+                            Ok(cfg) => cfg,
+                            Err(e) => {
+                                error!("Failed to load config: {}", e);
+                                continue;
+                            }
+                        };
+                        let (_, show_cmd) = cfg.commands();
+                        let cmd = substitute(&show_cmd, &config_path_for_events);
+
+                        // Run command synchronously in thread
+                        let result = std::process::Command::new("cmd").args(["/C", &cmd]).spawn();
+
+                        if let Err(e) = result {
+                            error!("Failed to show config folder: {}", e);
+                        } else {
+                            info!("Showed config folder");
+                        }
+                    } else if *event_id == quit_id {
+                        // Exit the application
+                        info!("Exit requested from tray menu");
+                        std::process::exit(0);
                     } else {
-                        info!("Opened config file");
+                        info!("Unknown menu event: {:?}", event_id);
                     }
-                } else if *event_id == show_config_folder_id {
-                    // Show config folder
-                    let cfg = match Config::load_from_path(&config_path_for_events) {
-                        Ok(cfg) => cfg,
-                        Err(e) => {
-                            error!("Failed to load config: {}", e);
-                            continue;
-                        }
-                    };
-                    let (_, show_cmd) = cfg.commands();
-                    let cmd = substitute(&show_cmd, &config_path_for_events);
-                    if let Err(e) = run_command(&cmd).await {
-                        error!("Failed to show config folder: {}", e);
-                    } else {
-                        info!("Showed config folder");
-                    }
-                } else if *event_id == quit_id {
-                    // Exit the application
-                    info!("Exit requested from tray menu");
-                    std::process::exit(0);
+                }
+                Err(e) => {
+                    error!("Failed to receive menu event: {}", e);
+                    break;
                 }
             }
-
-            // Small delay to prevent busy waiting
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
     });
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // Start HTTP server in a separate thread
+    let server_addr = addr;
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind(server_addr).await.unwrap();
+            axum::serve(listener, app).await.unwrap();
+        });
+    });
+
+    info!("HTTP server started on separate thread");
+
+    // Run Windows message loop on main thread
+    #[cfg(windows)]
+    {
+        info!("Starting Windows message loop...");
+        unsafe {
+            use winapi::um::winuser::{DispatchMessageW, GetMessageW, MSG, TranslateMessage};
+            let mut msg: MSG = std::mem::zeroed();
+            loop {
+                let bret = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
+                if bret == 0 || bret == -1 {
+                    break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        info!("Non-Windows platform, keeping main thread alive...");
+        // For non-Windows platforms, just keep the main thread alive
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
     Ok(())
 }
 
