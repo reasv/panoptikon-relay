@@ -14,7 +14,10 @@ use std::{
 use tokio::process::Command;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
-use tray_icon::{TrayIconBuilder, menu::Menu}; // Added for robust logger initialization
+use tray_icon::{
+    TrayIconBuilder,
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+};
 
 // ─────────────────────────────────────────────────────────────
 // CLI / daemon flags
@@ -464,6 +467,10 @@ async fn main() -> anyhow::Result<()> {
     let port = cfg.port(cli.port);
     let (token, from_env) = load_or_generate_token(&config_path)?;
 
+    // Clone necessary data for the event handler before moving into AppState
+    let token_for_events = token.clone();
+    let config_path_for_events = config_path.clone();
+
     let state = Arc::new(AppState {
         config_path,
         token: token.clone(),
@@ -484,7 +491,30 @@ async fn main() -> anyhow::Result<()> {
     } else {
         info!("Using API key from environment variable (not shown for security)");
     }
-    let tray_menu = Menu::new();
+
+    // Create menu items
+    let copy_token_item = MenuItem::new("Copy API Key", true, None);
+    let open_config_item = MenuItem::new("Open Config File", true, None);
+    let show_config_folder_item = MenuItem::new("Show Config Folder", true, None);
+    let separator = PredefinedMenuItem::separator();
+    let quit_item = MenuItem::new("Exit", true, None);
+
+    // Create the tray menu with items
+    let tray_menu = Menu::with_items(&[
+        &copy_token_item,
+        &separator,
+        &open_config_item,
+        &show_config_folder_item,
+        &separator,
+        &quit_item,
+    ])
+    .unwrap();
+
+    // Store menu item IDs for event handling
+    let copy_token_id = copy_token_item.id().clone();
+    let open_config_id = open_config_item.id().clone();
+    let show_config_folder_id = show_config_folder_item.id().clone();
+    let quit_id = quit_item.id().clone();
 
     // Embed the icon at compile time and convert it to the proper format
     let icon_data = include_bytes!("../icon.ico");
@@ -510,6 +540,70 @@ async fn main() -> anyhow::Result<()> {
         .with_icon(icon)
         .build()
         .unwrap();
+
+    // Start the menu event handler in a separate task
+    tokio::spawn(async move {
+        let menu_event_receiver = MenuEvent::receiver();
+
+        loop {
+            if let Ok(event) = menu_event_receiver.try_recv() {
+                let event_id = event.id();
+
+                if *event_id == copy_token_id {
+                    // Copy API key to clipboard
+                    match arboard::Clipboard::new() {
+                        Ok(mut clipboard) => {
+                            if let Err(e) = clipboard.set_text(&token_for_events) {
+                                error!("Failed to copy token to clipboard: {}", e);
+                            } else {
+                                info!("API key copied to clipboard");
+                            }
+                        }
+                        Err(e) => error!("Failed to access clipboard: {}", e),
+                    }
+                } else if *event_id == open_config_id {
+                    // Open config file
+                    let cfg = match Config::load_from_path(&config_path_for_events) {
+                        Ok(cfg) => cfg,
+                        Err(e) => {
+                            error!("Failed to load config: {}", e);
+                            continue;
+                        }
+                    };
+                    let (open_cmd, _) = cfg.commands();
+                    let cmd = substitute(&open_cmd, &config_path_for_events);
+                    if let Err(e) = run_command(&cmd).await {
+                        error!("Failed to open config file: {}", e);
+                    } else {
+                        info!("Opened config file");
+                    }
+                } else if *event_id == show_config_folder_id {
+                    // Show config folder
+                    let cfg = match Config::load_from_path(&config_path_for_events) {
+                        Ok(cfg) => cfg,
+                        Err(e) => {
+                            error!("Failed to load config: {}", e);
+                            continue;
+                        }
+                    };
+                    let (_, show_cmd) = cfg.commands();
+                    let cmd = substitute(&show_cmd, &config_path_for_events);
+                    if let Err(e) = run_command(&cmd).await {
+                        error!("Failed to show config folder: {}", e);
+                    } else {
+                        info!("Showed config folder");
+                    }
+                } else if *event_id == quit_id {
+                    // Exit the application
+                    info!("Exit requested from tray menu");
+                    std::process::exit(0);
+                }
+            }
+
+            // Small delay to prevent busy waiting
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    });
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
