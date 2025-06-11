@@ -12,7 +12,7 @@ use std::{
     sync::Arc,
 };
 use tokio::process::Command;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 use tray_icon::{
     TrayIconBuilder,
@@ -499,8 +499,6 @@ async fn main() -> anyhow::Result<()> {
     let separator = PredefinedMenuItem::separator();
     let quit_item = MenuItem::new("Exit", true, None);
 
-    info!("Created menu items");
-
     // Create the tray menu with items
     let tray_menu = Menu::with_items(&[
         &copy_token_item,
@@ -512,15 +510,13 @@ async fn main() -> anyhow::Result<()> {
     ])
     .unwrap();
 
-    info!("Created tray menu");
-
     // Store menu item IDs for event handling
     let copy_token_id = copy_token_item.id().clone();
     let open_config_id = open_config_item.id().clone();
     let show_config_folder_id = show_config_folder_item.id().clone();
     let quit_id = quit_item.id().clone();
 
-    info!(
+    debug!(
         "Menu item IDs - Copy: {:?}, Open: {:?}, Show: {:?}, Quit: {:?}",
         copy_token_id, open_config_id, show_config_folder_id, quit_id
     );
@@ -550,25 +546,22 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .unwrap();
 
-    info!("Tray icon created successfully");
-
     // Start the menu event handler in a blocking task
     let token_for_events = token_for_events.clone();
     let config_path_for_events = config_path_for_events.clone();
 
     std::thread::spawn(move || {
         let menu_event_receiver = MenuEvent::receiver();
-        info!("Menu event handler started, waiting for events...");
+        debug!("Menu event handler started, waiting for events...");
 
         loop {
             match menu_event_receiver.recv() {
                 Ok(event) => {
-                    info!("Received menu event: {:?}", event.id());
+                    debug!("Received menu event: {:?}", event.id());
                     let event_id = event.id();
 
                     if *event_id == copy_token_id {
                         // Copy API key to clipboard
-                        info!("Copy token menu item clicked");
                         match arboard::Clipboard::new() {
                             Ok(mut clipboard) => {
                                 if let Err(e) = clipboard.set_text(&token_for_events) {
@@ -581,7 +574,6 @@ async fn main() -> anyhow::Result<()> {
                         }
                     } else if *event_id == open_config_id {
                         // Open config file
-                        info!("Open config menu item clicked");
                         let cfg = match Config::load_from_path(&config_path_for_events) {
                             Ok(cfg) => cfg,
                             Err(e) => {
@@ -601,8 +593,6 @@ async fn main() -> anyhow::Result<()> {
                             info!("Opened config file");
                         }
                     } else if *event_id == show_config_folder_id {
-                        // Show config folder
-                        info!("Show config folder menu item clicked");
                         let cfg = match Config::load_from_path(&config_path_for_events) {
                             Ok(cfg) => cfg,
                             Err(e) => {
@@ -647,7 +637,7 @@ async fn main() -> anyhow::Result<()> {
         });
     });
 
-    info!("HTTP server started on separate thread");
+    debug!("HTTP server started on separate thread");
 
     // Run Windows message loop on main thread
     #[cfg(windows)]
@@ -669,7 +659,7 @@ async fn main() -> anyhow::Result<()> {
 
     #[cfg(not(windows))]
     {
-        info!("Non-Windows platform, keeping main thread alive...");
+        debug!("Non-Windows platform, keeping main thread alive...");
         // For non-Windows platforms, just keep the main thread alive
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
