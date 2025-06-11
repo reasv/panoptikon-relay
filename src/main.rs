@@ -98,10 +98,7 @@ mod map_to_vec {
 // Runtime state shared with Axum handlers
 // ─────────────────────────────────────────────────────────────
 struct AppState {
-    cfg: Config,
     config_path: PathBuf,
-    open_cmd: String,
-    show_cmd: String,
     token: String,
     require_token: bool,
 }
@@ -207,6 +204,12 @@ impl Config {
         }
         let txt = std::fs::read_to_string(&path)?;
         Ok((toml::from_str(&txt)?, path))
+    }
+
+    /// Load config from a specific path (for reloading)
+    fn load_from_path(path: &Path) -> anyhow::Result<Self> {
+        let txt = std::fs::read_to_string(path)?;
+        Ok(toml::from_str(&txt)?)
     }
 
     /// Translate by longest prefix (already sorted).
@@ -358,19 +361,32 @@ async fn open(
         }
     }
 
+    // Reload config for fresh commands and mappings
+    let cfg = match Config::load_from_path(&st.config_path) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            error!("Failed to reload config: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
     // Path translation
-    let client_path = match st.cfg.translate(&q.path) {
+    let client_path = match cfg.translate(&q.path) {
         Some(p) => p,
         None => return StatusCode::BAD_REQUEST,
     };
 
+    // Get fresh commands
+    let (open_cmd, show_cmd) = cfg.commands();
+
     // Resolve template
     let cmd_tpl = match q.verb.as_deref() {
-        Some("folder") => &st.show_cmd,
-        _ => &st.open_cmd,
+        Some("folder") => &show_cmd,
+        _ => &open_cmd,
     };
     let cmd = substitute(cmd_tpl, &client_path);
     info!("Running command: {cmd} for path: {client_path:?}");
+
     // Spawn command
     if let Err(e) = run_command(&cmd).await {
         error!(?e, "Command failed");
@@ -391,10 +407,22 @@ async fn config_endpoint(
         }
     }
 
+    // Reload config for fresh commands
+    let cfg = match Config::load_from_path(&st.config_path) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            error!("Failed to reload config: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    // Get fresh commands
+    let (open_cmd, show_cmd) = cfg.commands();
+
     // Resolve template
     let cmd_tpl = match q.verb.as_deref() {
-        Some("folder") => &st.show_cmd,
-        _ => &st.open_cmd,
+        Some("folder") => &show_cmd,
+        _ => &open_cmd,
     };
     let cmd = substitute(cmd_tpl, &st.config_path);
     info!(
@@ -429,15 +457,14 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let (cfg, config_path) = Config::load()?;
     info!("Loaded config");
-    let (open_cmd, show_cmd) = cfg.commands();
+
+    // Network configuration is set at startup and remains fixed
     let bind_ip = cfg.bind_address(cli.bind_address.as_ref());
     let port = cfg.port(cli.port);
     let (token, from_env) = load_or_generate_token(&config_path)?;
+
     let state = Arc::new(AppState {
-        cfg,
         config_path,
-        open_cmd,
-        show_cmd,
         token: token.clone(),
         require_token: !cli.no_token,
     });
