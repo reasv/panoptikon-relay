@@ -26,8 +26,12 @@ use tracing_subscriber::EnvFilter; // Added for robust logger initialization
 )]
 struct Cli {
     /// TCP port to listen on (default 17600)
-    #[arg(long, default_value_t = 17600)]
-    port: u16,
+    #[arg(long)]
+    port: Option<u16>,
+
+    /// IP address to bind to (default 127.0.0.1)
+    #[arg(long)]
+    bind_address: Option<String>,
 
     /// Disable capability‑token check (NOT recommended)
     #[arg(long)]
@@ -41,6 +45,8 @@ struct Cli {
 struct Config {
     #[serde(default)]
     commands: Commands,
+    #[serde(default)]
+    network: NetworkConfig,
     #[serde(default, with = "map_to_vec")]
     mappings: Vec<Mapping>,
 }
@@ -49,6 +55,12 @@ struct Config {
 struct Commands {
     open_file: Option<String>,
     show_in_fm: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct NetworkConfig {
+    bind_address: Option<String>,
+    port: Option<u16>,
 }
 
 #[derive(Debug)]
@@ -225,6 +237,44 @@ impl Config {
 
         (open, show)
     }
+
+    fn bind_address(&self, cli_bind_address: Option<&String>) -> String {
+        // Priority: Environment variable > CLI argument > Config file > Default
+        if let Ok(env_addr) = std::env::var("BIND_ADDRESS") {
+            if !env_addr.is_empty() {
+                return env_addr;
+            }
+        }
+
+        // CLI argument takes precedence over config file
+        if let Some(cli_addr) = cli_bind_address {
+            return cli_addr.clone();
+        }
+
+        // Config file value
+        self.network
+            .bind_address
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "127.0.0.1".to_string())
+    }
+
+    fn port(&self, cli_port: Option<u16>) -> u16 {
+        // Priority: Environment variable > CLI argument > Config file > Default
+        if let Ok(env_port) = std::env::var("PORT") {
+            if let Ok(port) = env_port.parse::<u16>() {
+                return port;
+            }
+        }
+
+        // CLI argument takes precedence over config file
+        if let Some(port) = cli_port {
+            return port;
+        }
+
+        // Config file value
+        self.network.port.unwrap_or(17600)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -380,6 +430,8 @@ async fn main() -> anyhow::Result<()> {
     let (cfg, config_path) = Config::load()?;
     info!("Loaded config");
     let (open_cmd, show_cmd) = cfg.commands();
+    let bind_ip = cfg.bind_address(cli.bind_address.as_ref());
+    let port = cfg.port(cli.port);
     let (token, from_env) = load_or_generate_token(&config_path)?;
     let state = Arc::new(AppState {
         cfg,
@@ -396,7 +448,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/config", post(config_endpoint))
         .with_state(state);
 
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], cli.port));
+    let addr = format!("{}:{}", bind_ip, port).parse::<std::net::SocketAddr>()?;
 
     info!("Listening on http://{addr}");
     if !from_env {
@@ -423,6 +475,16 @@ const DEFAULT_CONFIG: &str = r##"
 # The default commands are platform-specific.
 open_file  = ""                      # leave empty to use platform default
 show_in_fm = ""                      
+
+[network]
+# Network configuration
+# IP address to bind to (default: 127.0.0.1)
+# Priority: BIND_ADDRESS env var > --bind-address CLI arg > config file > default
+bind_address = "127.0.0.1"
+
+# Port to listen on (default: 17600)
+# Priority: PORT env var > --port CLI arg > config file > default
+port = 17600
 
 # Map *server* path prefixes to *client* prefixes
 [mappings]
