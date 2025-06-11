@@ -1,4 +1,10 @@
-use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
+use axum::{
+    Router,
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+};
 use clap::{Parser, arg, command};
 use serde::Deserialize;
 use std::{
@@ -7,6 +13,7 @@ use std::{
 };
 use tokio::process::Command;
 use tracing::{error, info};
+use tracing_subscriber::EnvFilter; // Added for robust logger initialization
 
 // ─────────────────────────────────────────────────────────────
 // CLI / daemon flags
@@ -231,7 +238,7 @@ async fn open(
         _ => &st.open_cmd,
     };
     let cmd = substitute(cmd_tpl, &client_path);
-
+    info!("Running command: {cmd} for path: {client_path:?}");
     // Spawn command
     if let Err(e) = run_command(&cmd).await {
         error!(?e, "Command failed");
@@ -245,19 +252,33 @@ async fn open(
 // ─────────────────────────────────────────────────────────────
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    if tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .try_init()
+        .is_err()
+    {
+        eprintln!("Error: Failed to initialize the tracing subscriber. Logs may not be available.");
+    }
+    info!("Starting openfile-helper..."); // Moved after logger initialization
 
     let cli = Cli::parse();
     let cfg = Config::load()?;
     info!("Loaded config");
     let (open_cmd, show_cmd) = cfg.commands();
+    info!("Commands processed");
 
-    let token: String = cfg
-        .token
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let token: String;
+    if let Some(config_token) = cfg.token.clone() {
+        info!("Using token from config.");
+        token = config_token;
+    } else {
+        info!("No token in config. Attempting to generate a new UUID...");
+        token = uuid::Uuid::new_v4().to_string();
+        info!("New UUID generated for token.");
+    }
+    info!("Token processing complete.");
 
     let state = Arc::new(AppState {
         cfg,
@@ -266,13 +287,17 @@ async fn main() -> anyhow::Result<()> {
         token: token.clone(),
         require_token: !cli.no_token,
     });
+    info!("App state created");
 
     let app = Router::new()
         .route("/healthy", get(healthy))
-        .route("/open", get(open))
+        .route("/open", post(open))
         .with_state(state);
+    info!("Router created");
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], cli.port));
+    info!("Socket address created");
+
     info!("Listening on http://{addr}");
     info!("The API key is: {token}");
 
