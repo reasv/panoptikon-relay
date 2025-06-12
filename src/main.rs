@@ -5,7 +5,7 @@
 use axum::{
     Router,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Method, StatusCode, header},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -16,6 +16,7 @@ use std::{
     sync::Arc,
 };
 use tokio::{process::Command, runtime::Runtime};
+use tower_http::cors::CorsLayer;
 use tracing::{debug, error, info};
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
@@ -550,11 +551,17 @@ async fn main() -> anyhow::Result<()> {
         require_token: !cli.no_token,
     });
 
+    let cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .allow_origin(tower_http::cors::Any);
+
     let app = Router::new()
         .route("/healthy", get(healthy))
         .route("/open", post(open))
         .route("/config", post(config_endpoint))
-        .with_state(state);
+        .with_state(state)
+        .layer(cors);
 
     let addr = format!("{}:{}", bind_ip, port).parse::<std::net::SocketAddr>()?;
 
