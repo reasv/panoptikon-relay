@@ -154,17 +154,20 @@ fn substitute(cmd_tpl: &str, path: &Path) -> String {
 async fn run_command(cmd: &str) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
         // On Windows, parsing command strings is tricky. It's more robust
         // to pass arguments separately instead of a single string to `cmd /C`.
 
         // Special, robust handling for the `start` command.
         // `start ""` requires the empty title `""` as its own argument.
         if let Some(path_part) = cmd.strip_prefix(r#"start "" "#) {
-            // The path_part is the quoted path, e.g., `"C:\path\to\file.toml"`.
+            // The path_part is the quoted path, e.g., `"C:\\path\\to\\file.toml"`.
             // We must un-quote it here, because the Command builder will add
             // its own quotes correctly when spawning the process.
             let unquoted_path = path_part.trim_matches('"');
             Command::new("cmd")
+                .creation_flags(CREATE_NO_WINDOW) // Prevent console window flash
                 .arg("/C")
                 .arg("start")
                 .arg("") // This is the empty title argument
@@ -175,11 +178,17 @@ async fn run_command(cmd: &str) -> std::io::Result<()> {
         // It's an executable, so we can call it directly without `cmd /C`.
         } else if let Some(path_part) = cmd.strip_prefix("explorer ") {
             Command::new("explorer")
-                .arg(path_part) // e.g., /select,"C:\path\to\file.toml"
+                // explorer.exe is a GUI app, CREATE_NO_WINDOW is generally not needed here
+                // but can be added if any issues were observed.
+                // .creation_flags(CREATE_NO_WINDOW)
+                .arg(path_part) // e.g., /select,"C:\\path\\to\\file.toml"
                 .spawn()?;
         } else {
             // Fallback for other custom commands
-            Command::new("cmd").args(["/C", cmd]).spawn()?;
+            Command::new("cmd")
+                .creation_flags(CREATE_NO_WINDOW) // Prevent console window flash
+                .args(["/C", cmd])
+                .spawn()?;
         }
     }
     #[cfg(not(target_os = "windows"))]
