@@ -1287,6 +1287,7 @@ dependencies = [
  "clap",
  "dirs",
  "eyre",
+ "gtk",
  "image",
  "regex",
  "serde",

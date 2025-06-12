@@ -24,6 +24,9 @@ arboard = "3.4.1"
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winuser"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
 [dependencies.uuid]
 version = "1.17.0"
 # Lets you generate random UUIDs

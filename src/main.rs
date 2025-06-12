@@ -639,7 +639,7 @@ async fn main() -> anyhow::Result<()> {
 
     debug!("HTTP server started on separate thread");
 
-    // Run Windows message loop on main thread
+    // Platform-specific event loops
     #[cfg(windows)]
     {
         info!("Starting Windows message loop...");
@@ -657,10 +657,31 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
-        debug!("Non-Windows platform, keeping main thread alive...");
-        // For non-Windows platforms, just keep the main thread alive
+        info!("Starting GTK event loop...");
+        gtk::init().expect("Failed to initialize GTK");
+        gtk::main();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        info!("Starting macOS event loop...");
+        // On macOS, we need to run the main event loop
+        // The tray icon is already created on the main thread
+        use std::ffi::c_void;
+        extern "C" {
+            fn CFRunLoopRun();
+        }
+        unsafe {
+            CFRunLoopRun();
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        debug!("Unknown platform, keeping main thread alive...");
+        // For other platforms, just keep the main thread alive
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
