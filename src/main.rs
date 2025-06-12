@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::process::Command;
+use tokio::{process::Command, runtime::Runtime};
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 use tray_icon::{
@@ -585,7 +585,11 @@ async fn main() -> anyhow::Result<()> {
                         let cmd = substitute(&open_cmd, &config_path_for_events);
 
                         // Run command synchronously in thread
-                        let result = std::process::Command::new("cmd").args(["/C", &cmd]).spawn();
+                        let rt = Runtime::new().unwrap();
+                        let run_command_sync =
+                            |cmd: &str| rt.block_on(async { run_command(cmd).await });
+
+                        let result = run_command_sync(&cmd);
 
                         if let Err(e) = result {
                             error!("Failed to open config file: {}", e);
@@ -604,7 +608,12 @@ async fn main() -> anyhow::Result<()> {
                         let cmd = substitute(&show_cmd, &config_path_for_events);
 
                         // Run command synchronously in thread
-                        let result = std::process::Command::new("cmd").args(["/C", &cmd]).spawn();
+                        // Execute run_command function synchronously using tokio
+                        let rt = Runtime::new().unwrap();
+                        let run_command_sync =
+                            |cmd: &str| rt.block_on(async { run_command(cmd).await });
+
+                        let result = run_command_sync(&cmd);
 
                         if let Err(e) = result {
                             error!("Failed to show config folder: {}", e);
