@@ -209,7 +209,7 @@ async fn run_command(cmd: &str) -> std::io::Result<()> {
 // Config loader + helpers
 // ─────────────────────────────────────────────────────────────
 impl Config {
-    fn load() -> anyhow::Result<(Self, PathBuf)> {
+    async fn load() -> anyhow::Result<(Self, PathBuf)> {
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("No config dir"))?
             .join("panoptikon-relay");
@@ -220,6 +220,46 @@ impl Config {
             std::fs::create_dir_all(&config_dir)?;
             std::fs::write(&path, DEFAULT_CONFIG.trim_start())?;
             println!("Created default config at {}", path.display());
+
+            // Attempt to open the config file and its folder
+            info!(
+                "Default config created at {}. Attempting to open config file and folder.",
+                path.display()
+            );
+
+            let open_file_cmd_tpl = OPEN_DEFAULT;
+            let show_folder_cmd_tpl = REVEAL_DEFAULT;
+
+            let cmd_to_open_file = substitute(open_file_cmd_tpl, &path);
+            let config_folder_path = path.parent().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Config file path {} has no parent directory",
+                    path.display()
+                )
+            })?;
+            // Use `&path` for substitute, so explorer /select highlights the file
+            let cmd_to_show_folder = substitute(show_folder_cmd_tpl, &path);
+
+            if let Err(e) = run_command(&cmd_to_open_file).await {
+                error!(
+                    "Failed to open config file automatically ({}): {}",
+                    cmd_to_open_file, e
+                );
+            } else {
+                info!("Attempted to open config file: {}", path.display());
+            }
+
+            if let Err(e) = run_command(&cmd_to_show_folder).await {
+                error!(
+                    "Failed to show config folder automatically ({}): {}",
+                    cmd_to_show_folder, e
+                );
+            } else {
+                info!(
+                    "Attempted to show config folder: {}",
+                    config_folder_path.display()
+                );
+            }
         }
         let txt = std::fs::read_to_string(&path)?;
         Ok((toml::from_str(&txt)?, path))
@@ -492,7 +532,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Starting panoptikon-relay...");
 
     let cli = Cli::parse();
-    let (cfg, config_path) = Config::load()?;
+    let (cfg, config_path) = Config::load().await?;
     info!("Loaded config");
 
     // Network configuration is set at startup and remains fixed
