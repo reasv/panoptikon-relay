@@ -274,17 +274,36 @@ impl Config {
 
     /// Translate by longest prefix (already sorted).
     fn translate(&self, server_path: &str) -> Option<PathBuf> {
-        let canonical = server_path.replace('\\', "/");
+        info!("Translating server path: {}", server_path);
         let mapping = self
             .mappings
             .iter()
-            .find(|m| canonical.starts_with(&m.server))?;
-        let suffix = canonical.strip_prefix(&mapping.server).unwrap_or("");
+            .find(|m| server_path.starts_with(&m.server))?;
+        info!(
+            "Using mapping: {:?} -> {:?}",
+            mapping.server, mapping.client
+        );
+        let suffix = server_path.strip_prefix(&mapping.server).unwrap_or("");
+        let suffix_fixed = self.fix_suffix_slashes(suffix);
+        info!("Suffix after slashes fix: {}", suffix_fixed);
         let mut pb = PathBuf::from(&mapping.client);
-        for c in Path::new(suffix).components() {
+        for c in Path::new(&&suffix_fixed).components() {
             pb.push(c);
         }
         Some(pb)
+    }
+
+    fn fix_suffix_slashes(&self, suffix: &str) -> String {
+        #[cfg(windows)]
+        {
+            let fixed = suffix.replace("/", "\\");
+            return fixed;
+        }
+        #[cfg(not(windows))]
+        {
+            let fixed = suffix.replace("\\", "/");
+            return fixed;
+        }
     }
 
     fn commands(&self) -> (String, String) {
@@ -429,7 +448,6 @@ async fn open(
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
     };
-
     // Path translation
     let client_path = match cfg.translate(&q.path) {
         Some(p) => p,
