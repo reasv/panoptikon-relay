@@ -823,7 +823,8 @@ port = 17600
 
 # Map *server* path prefixes to *client* prefixes
 [mappings]
-"/srv/media"        = 'Z:\\media'
+# Example mappings:
+"/srv/media"        = 'Z:\media'
 "/home/user/videos" = '/Volumes/videos'
-"//nas/share/raw"   = 'X:\\raw'
+"//nas/share/raw"   = 'X:\raw'
 "##;
