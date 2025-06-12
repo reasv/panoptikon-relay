@@ -1,3 +1,7 @@
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 use axum::{
     Router,
     extract::State,
@@ -13,7 +17,9 @@ use std::{
 };
 use tokio::{process::Command, runtime::Runtime};
 use tracing::{debug, error, info};
+use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tray_icon::{
     TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -447,10 +453,28 @@ async fn config_endpoint(
 // ─────────────────────────────────────────────────────────────
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let config_dir_for_logs = dirs::config_dir()
+        .ok_or_else(|| anyhow::anyhow!("No config dir found for logging"))?
+        .join("panoptikon-relay");
+    if !config_dir_for_logs.exists() {
+        std::fs::create_dir_all(&config_dir_for_logs)?;
+    }
+
+    // Setup file logging with rotation
+    let file_appender = rolling::Builder::new()
+        .rotation(rolling::Rotation::DAILY) // Or Rotation::HOURLY, or Rotation::NEVER
+        .filename_prefix("panoptikon-relay")
+        .filename_suffix("log")
+        .max_log_files(7) // Keep 7 log files
+        .build(&config_dir_for_logs)?; // Log directory
+
+    let (non_blocking_writer, _guard) = tracing_appender::non_blocking(file_appender);
+
     if tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
+        .with_writer(non_blocking_writer.and(std::io::stdout)) // Log to both file and stdout
         .try_init()
         .is_err()
     {
