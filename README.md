@@ -222,7 +222,3 @@ If you wish to build Panoptikon Relay from source:
 - **Path Mappings:** Incorrect path mappings are a common issue. Double-check that the server paths in `[mappings]` exactly match how Panoptikon sees them, and client paths are correct for your local machine. Remember that the longest prefix match is used.
 - **API Key:** Ensure the API key configured in Panoptikon matches the one in Relay's `token.txt` or `API_KEY_SECRET` environment variable.
 - **Command Issues:** If files aren't opening correctly, test your custom commands (if any) directly in your terminal to ensure they work as expected with the `{path}`, `{folder}`, and `{filename}` placeholders manually substituted.
-
----
-
-_Panoptikon Relay is an independent project and is not officially affiliated with the Panoptikon project, though it is designed to complement it._
